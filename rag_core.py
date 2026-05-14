@@ -893,6 +893,7 @@ def resolve_api_key_for_model(model: str, api_key: str | None = None) -> str | N
         return (
             api_key
             or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGING_FACE_HUB_TOKEN")
             or os.getenv("HUGGINGFACEHUB_API_TOKEN")
             or os.getenv("HUGGINGFACE_API_KEY")
         )
