@@ -33,6 +33,7 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=6, ge=1, le=20)
     top_n_recommendations: int = Field(default=5, ge=1, le=10)
     generation_model: str = Field(default=DEFAULT_GENERATION_MODEL)
+    include_sources: bool = Field(default=False)
     session_id: str | None = Field(default=None, min_length=1, max_length=120)
     remember_history: bool = Field(default=True)
     chat_history: list["ChatMessage"] = Field(default_factory=list, max_length=20)
@@ -208,6 +209,8 @@ def ask(request: AskRequest) -> dict:
             result["history_message_count"] = len(
                 getattr(app.state, "chat_sessions", {}).get(request.session_id, history)
             )
+        if not request.include_sources:
+            result["sources"] = []
         return result
     except RAGError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
