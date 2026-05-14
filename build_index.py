@@ -11,7 +11,7 @@ from rag_core import RAGError, build_index_payload, save_index
 
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv()
+load_dotenv(override=True)
 
 
 def resolve_path(path_value: str | None, base_dir: Path) -> Path | None:

@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from rag_core import ask_alpha_cinema, load_index
 
 
@@ -12,6 +14,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env", override=True)
 # Smoke test đơn giản: nạp index mẫu, chạy các query mẫu và in kết quả để kiểm tra pipeline đầu cuối.
 index = load_index(ROOT / 'storage' / 'alpha_cinema_index.json')
 queries = json.loads((ROOT / 'samples' / 'smoke_test_queries.json').read_text(encoding='utf-8'))

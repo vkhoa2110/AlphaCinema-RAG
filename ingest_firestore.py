@@ -11,7 +11,7 @@ from rag_core import RAGError, fetch_movies_from_firestore, json_dumps
 
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv()
+load_dotenv(override=True)
 
 
 def resolve_path(path_value: str, base_dir: Path) -> Path:

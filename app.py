@@ -10,20 +10,29 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from rag_core import RAGError, ask_alpha_cinema, load_index, recommend_movies
+from rag_core import (
+    RAGError,
+    ask_alpha_cinema,
+    load_index,
+    recommend_movies,
+    resolve_openai_generation_model,
+)
 
 
-load_dotenv()
+load_dotenv(override=True)
 ROOT = Path(__file__).resolve().parent
 DEFAULT_INDEX_PATH = ROOT / "storage" / "alpha_cinema_index.json"
 MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "12"))
+DEFAULT_GENERATION_MODEL = resolve_openai_generation_model(
+    os.getenv("OPENAI_GENERATION_MODEL") or os.getenv("GENERATION_MODEL")
+)
 
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
     top_k: int = Field(default=6, ge=1, le=20)
     top_n_recommendations: int = Field(default=5, ge=1, le=10)
-    generation_model: str = Field(default=os.getenv("GENERATION_MODEL", "gpt-4o-mini"))
+    generation_model: str = Field(default=DEFAULT_GENERATION_MODEL)
     session_id: str | None = Field(default=None, min_length=1, max_length=120)
     remember_history: bool = Field(default=True)
     chat_history: list["ChatMessage"] = Field(default_factory=list, max_length=20)
@@ -176,6 +185,7 @@ def ask(request: AskRequest) -> dict:
 
     index_payload = get_ready_index()
     history = resolve_request_history(request)
+    generation_model = resolve_openai_generation_model(request.generation_model)
     try:
         result = ask_alpha_cinema(
             question=question,
@@ -183,7 +193,7 @@ def ask(request: AskRequest) -> dict:
             api_key=None,
             top_k=request.top_k,
             top_n_recommendations=request.top_n_recommendations,
-            generation_model=request.generation_model,
+            generation_model=generation_model,
             chat_history=history,
         )
         persist_session_history(

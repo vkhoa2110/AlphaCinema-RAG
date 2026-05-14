@@ -53,6 +53,7 @@ DOCX_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/
 INTENT_LABELS = ("policy", "movie", "recommendation", "mixed")
 BM25_K1 = 1.5
 BM25_B = 0.75
+DEFAULT_OPENAI_GENERATION_MODEL = "gpt-4o-mini"
 
 
 class RAGError(RuntimeError):
@@ -823,13 +824,58 @@ def build_doc_freq(items: Sequence[dict[str, Any] | Chunk | MovieDocument], fiel
 def is_openai_model(model: str) -> bool:
     """Nhận diện model thuộc họ OpenAI để chọn SDK và env key tương ứng."""
     normalized = (model or "").strip().lower()
-    return normalized.startswith(("gpt-", "text-embedding-", "o1", "o3", "o4"))
+    return normalized.startswith(
+        (
+            "gpt-",
+            "chatgpt-",
+            "o1",
+            "o3",
+            "o4",
+            "text-embedding-3-",
+            "text-embedding-ada-",
+        )
+    )
+
+
+def is_openai_generation_model(model: str) -> bool:
+    """Return True only for OpenAI text generation models, not embedding models."""
+    normalized = (model or "").strip().lower()
+    return normalized.startswith(("gpt-", "chatgpt-", "o1", "o3", "o4"))
 
 
 def is_gemini_model(model: str) -> bool:
     """Nhận diện model Gemini để route sang client của Google."""
     normalized = (model or "").strip().lower()
-    return normalized.startswith(("gemini", "models/gemini"))
+    return normalized.startswith(
+        (
+            "gemini",
+            "models/gemini",
+            "text-embedding-004",
+            "models/text-embedding-004",
+            "embedding-001",
+            "models/embedding-001",
+        )
+    )
+
+
+def resolve_openai_generation_model(model: str | None = None) -> str:
+    """Force answer generation to an OpenAI model even if env/client sends Gemini."""
+    requested = (model or "").strip()
+    if requested and is_openai_generation_model(requested):
+        return requested
+
+    configured = (
+        os.getenv("OPENAI_GENERATION_MODEL")
+        or os.getenv("GENERATION_MODEL")
+        or DEFAULT_OPENAI_GENERATION_MODEL
+    ).strip()
+    if is_openai_generation_model(configured):
+        return configured
+
+    fallback = (os.getenv("OPENAI_GENERATION_MODEL") or DEFAULT_OPENAI_GENERATION_MODEL).strip()
+    if is_openai_generation_model(fallback):
+        return fallback
+    return DEFAULT_OPENAI_GENERATION_MODEL
 
 
 def resolve_api_key_for_model(model: str, api_key: str | None = None) -> str | None:
@@ -861,6 +907,14 @@ def get_openai_client(api_key: str | None = None):
     return OpenAI(api_key=api_key)
 
 
+def sanitize_provider_error_message(exc: Exception) -> str:
+    """Remove API-key-like values from provider errors before logging."""
+    message = str(exc)
+    message = re.sub(r"sk(?:-proj)?-[A-Za-z0-9_*.\-]{8,}", "sk-***", message)
+    message = re.sub(r"AIza[0-9A-Za-z_\-]{20,}", "AIza***", message)
+    return message
+
+
 def generate_text_with_model(
     prompt: str,
     api_key: str | None,
@@ -871,16 +925,18 @@ def generate_text_with_model(
     if not resolved_api_key:
         return None
 
-    if is_openai_model(model):
+    if is_openai_generation_model(model):
         client = get_openai_client(resolved_api_key)
         provider = "OpenAI"
-    else:
+    elif is_gemini_model(model):
         client = get_gemini_client(resolved_api_key)
         provider = "Gemini"
+    else:
+        raise RAGError(f"Unsupported generation model: {model}")
 
     try:
         try:
-            if is_openai_model(model):
+            if is_openai_generation_model(model):
                 response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
@@ -893,7 +949,11 @@ def generate_text_with_model(
                     config=types.GenerateContentConfig(temperature=temperature, top_p=0.9),
                 )
         except (ClientError, OpenAIAPIError, RAGError) as exc:
-            print(f"Warning: {provider} text generation is unavailable. Reason: {exc}")
+            print(
+                "Warning: "
+                f"{provider} text generation is unavailable. "
+                f"Reason: {sanitize_provider_error_message(exc)}"
+            )
             return None
     finally:
         try:
@@ -901,7 +961,7 @@ def generate_text_with_model(
         except Exception:
             pass
 
-    if is_openai_model(model):
+    if is_openai_generation_model(model):
         choice = ((getattr(response, "choices", None) or [])[:1] or [None])[0]
         message = getattr(choice, "message", None)
         text = (getattr(message, "content", None) or "").strip()
@@ -2109,6 +2169,7 @@ def ask_alpha_cinema(
 ) -> dict[str, Any]:
     """Entry point chính của hệ thống RAG: detect intent rồi route sang QA hoặc recommendation."""
     sanitized_history = sanitize_chat_history(chat_history)
+    generation_model = resolve_openai_generation_model(generation_model)
     standalone_question = contextualize_question(
         question=question,
         chat_history=sanitized_history,
@@ -2150,6 +2211,7 @@ def ask_alpha_cinema(
         return {
             "mode": "recommendation",
             "intent": intent,
+            "generation_model": generation_model,
             "question": question,
             "standalone_question": standalone_question,
             "answer": answer,
@@ -2175,6 +2237,7 @@ def ask_alpha_cinema(
     return {
         "mode": "qa",
         "intent": intent,
+        "generation_model": generation_model,
         "question": question,
         "standalone_question": standalone_question,
         "answer": answer,
