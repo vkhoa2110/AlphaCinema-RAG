@@ -15,7 +15,7 @@ from rag_core import (
     ask_alpha_cinema,
     load_index,
     recommend_movies,
-    resolve_openai_generation_model,
+    resolve_generation_model,
 )
 
 
@@ -23,8 +23,8 @@ load_dotenv(override=True)
 ROOT = Path(__file__).resolve().parent
 DEFAULT_INDEX_PATH = ROOT / "storage" / "alpha_cinema_index.json"
 MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "12"))
-DEFAULT_GENERATION_MODEL = resolve_openai_generation_model(
-    os.getenv("OPENAI_GENERATION_MODEL") or os.getenv("GENERATION_MODEL")
+DEFAULT_GENERATION_MODEL = resolve_generation_model(
+    os.getenv("HF_GENERATION_MODEL") or os.getenv("GENERATION_MODEL")
 )
 
 
@@ -185,7 +185,7 @@ def ask(request: AskRequest) -> dict:
 
     index_payload = get_ready_index()
     history = resolve_request_history(request)
-    generation_model = resolve_openai_generation_model(request.generation_model)
+    generation_model = resolve_generation_model(request.generation_model)
     try:
         result = ask_alpha_cinema(
             question=question,

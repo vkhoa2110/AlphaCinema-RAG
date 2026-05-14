@@ -53,7 +53,8 @@ DOCX_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/
 INTENT_LABELS = ("policy", "movie", "recommendation", "mixed")
 BM25_K1 = 1.5
 BM25_B = 0.75
-DEFAULT_OPENAI_GENERATION_MODEL = "gpt-4o-mini"
+DEFAULT_HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
+DEFAULT_HF_GENERATION_MODEL = "openai/gpt-oss-20b:groq"
 
 
 class RAGError(RuntimeError):
@@ -858,33 +859,54 @@ def is_gemini_model(model: str) -> bool:
     )
 
 
-def resolve_openai_generation_model(model: str | None = None) -> str:
-    """Force answer generation to an OpenAI model even if env/client sends Gemini."""
+def is_huggingface_router_model(model: str) -> bool:
+    """Detect Hugging Face Router model IDs such as openai/gpt-oss-20b:groq."""
+    normalized = (model or "").strip()
+    return "/" in normalized and not normalized.lower().startswith("models/")
+
+
+def resolve_generation_model(model: str | None = None) -> str:
+    """Prefer a public Hugging Face Router model for answer generation."""
     requested = (model or "").strip()
-    if requested and is_openai_generation_model(requested):
+    if requested and is_huggingface_router_model(requested):
         return requested
 
     configured = (
-        os.getenv("OPENAI_GENERATION_MODEL")
+        os.getenv("HF_GENERATION_MODEL")
         or os.getenv("GENERATION_MODEL")
-        or DEFAULT_OPENAI_GENERATION_MODEL
+        or DEFAULT_HF_GENERATION_MODEL
     ).strip()
-    if is_openai_generation_model(configured):
+    if is_huggingface_router_model(configured):
         return configured
 
-    fallback = (os.getenv("OPENAI_GENERATION_MODEL") or DEFAULT_OPENAI_GENERATION_MODEL).strip()
-    if is_openai_generation_model(fallback):
-        return fallback
-    return DEFAULT_OPENAI_GENERATION_MODEL
+    return DEFAULT_HF_GENERATION_MODEL
+
+
+def resolve_openai_generation_model(model: str | None = None) -> str:
+    """Backward-compatible alias for older imports."""
+    return resolve_generation_model(model)
 
 
 def resolve_api_key_for_model(model: str, api_key: str | None = None) -> str | None:
     """Chọn API key phù hợp với provider của model đang dùng."""
+    if is_huggingface_router_model(model):
+        return (
+            api_key
+            or os.getenv("HF_TOKEN")
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+            or os.getenv("HUGGINGFACE_API_KEY")
+        )
     if is_openai_model(model):
         return api_key or os.getenv("OPENAI_API_KEY")
     if is_gemini_model(model):
         return api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    return api_key or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    return (
+        api_key
+        or os.getenv("HF_TOKEN")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
 
 
 def get_gemini_client(api_key: str | None = None):
@@ -897,13 +919,15 @@ def get_gemini_client(api_key: str | None = None):
     return genai.Client(api_key=api_key)
 
 
-def get_openai_client(api_key: str | None = None):
+def get_openai_client(api_key: str | None = None, base_url: str | None = None):
     """Tạo OpenAI client dùng cho embedding hoặc generation."""
     if OpenAI is None:
         raise RAGError("openai is not installed. Run: pip install -r requirements.txt")
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RAGError("Missing OPENAI_API_KEY.")
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
     return OpenAI(api_key=api_key)
 
 
@@ -911,8 +935,17 @@ def sanitize_provider_error_message(exc: Exception) -> str:
     """Remove API-key-like values from provider errors before logging."""
     message = str(exc)
     message = re.sub(r"sk(?:-proj)?-[A-Za-z0-9_*.\-]{8,}", "sk-***", message)
+    message = re.sub(r"hf_[A-Za-z0-9]{8,}", "hf_***", message)
     message = re.sub(r"AIza[0-9A-Za-z_\-]{20,}", "AIza***", message)
     return message
+
+
+def get_hf_router_base_url() -> str:
+    return (
+        os.getenv("GENERATION_BASE_URL")
+        or os.getenv("HF_ROUTER_BASE_URL")
+        or DEFAULT_HF_ROUTER_BASE_URL
+    ).strip()
 
 
 def generate_text_with_model(
@@ -925,7 +958,11 @@ def generate_text_with_model(
     if not resolved_api_key:
         return None
 
-    if is_openai_generation_model(model):
+    uses_chat_completions = is_huggingface_router_model(model) or is_openai_generation_model(model)
+    if is_huggingface_router_model(model):
+        client = get_openai_client(resolved_api_key, base_url=get_hf_router_base_url())
+        provider = "Hugging Face Router"
+    elif is_openai_generation_model(model):
         client = get_openai_client(resolved_api_key)
         provider = "OpenAI"
     elif is_gemini_model(model):
@@ -936,7 +973,7 @@ def generate_text_with_model(
 
     try:
         try:
-            if is_openai_generation_model(model):
+            if uses_chat_completions:
                 response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
@@ -961,7 +998,7 @@ def generate_text_with_model(
         except Exception:
             pass
 
-    if is_openai_generation_model(model):
+    if uses_chat_completions:
         choice = ((getattr(response, "choices", None) or [])[:1] or [None])[0]
         message = getattr(choice, "message", None)
         text = (getattr(message, "content", None) or "").strip()
@@ -2169,7 +2206,7 @@ def ask_alpha_cinema(
 ) -> dict[str, Any]:
     """Entry point chính của hệ thống RAG: detect intent rồi route sang QA hoặc recommendation."""
     sanitized_history = sanitize_chat_history(chat_history)
-    generation_model = resolve_openai_generation_model(generation_model)
+    generation_model = resolve_generation_model(generation_model)
     standalone_question = contextualize_question(
         question=question,
         chat_history=sanitized_history,

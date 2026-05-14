@@ -116,9 +116,11 @@ cp .env.example .env
 Điền các biến cần thiết:
 
 ```env
-OPENAI_API_KEY=your_key_if_you_want_dense_and_generation
+HF_TOKEN=your_huggingface_token_for_generation
+GENERATION_BASE_URL=https://router.huggingface.co/v1
+HF_GENERATION_MODEL=openai/gpt-oss-20b:groq
+GENERATION_MODEL=openai/gpt-oss-20b:groq
 EMBEDDING_MODEL=text-embedding-3-small
-GENERATION_MODEL=gpt-4o-mini
 FIREBASE_SERVICE_ACCOUNT_PATH=./secrets/firebase-service-account.json
 FIRESTORE_COLLECTION=movies
 MOVIES_SNAPSHOT_PATH=./data/firebase_movies_snapshot.json
